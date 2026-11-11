@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AV.BY Market Pulse — аналитика авторынка Беларуси</title>
+  <meta name="description" content="Интерактивный дашборд рынка б/у автомобилей Беларуси по данным cars.av.by: цены, марки, пробеги, годы и лучшие предложения." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <div class="bg-glow bg-glow--one" aria-hidden="true"></div>
+  <div class="bg-glow bg-glow--two" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="./">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26" fill="none">
+          <path d="M4 20l3-7a3 3 0 0 1 2.8-2h12.4A3 3 0 0 1 25 13l3 7" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round"/>
+          <path d="M4 20h24v5a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-1H12v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-5z" fill="url(#g)"/>
+          <circle cx="9.5" cy="20.5" r="1.6" fill="#0a0e1a"/>
+          <circle cx="22.5" cy="20.5" r="1.6" fill="#0a0e1a"/>
+          <defs><linearGradient id="g" x1="4" y1="11" x2="28" y2="27" gradientUnits="userSpaceOnUse"><stop stop-color="#818cf8"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+        </svg>
+      </span>
+      <span class="brand__text">
+        <strong>AV.BY</strong>
+        <span>Market Pulse</span>
+      </span>
+    </a>
+    <div class="topbar__meta">
+      <span class="pill" id="meta-count">— авто</span>
+      <span class="pill pill--muted" id="meta-date">—</span>
+      <span class="live"><i></i> данные cars.av.by</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <p class="eyebrow">Аналитика авторынка Беларуси</p>
+      <h1>Сколько на самом деле стоит<br><span class="grad">белорусский авторынок?</span></h1>
+      <p class="hero__lead">
+        Интерактивный дашборд по <strong id="hero-count">1 000+</strong> объявлениям с <code>cars.av.by</code>:
+        распределение цен, марки, пробеги, возраст и лучшие предложения — всё считается на лету.
+      </p>
+      <div class="hero__tags">
+        <span>Python</span><span>FastAPI</span><span>Scraper</span><span>ECharts</span>
+      </div>
+    </section>
+
+    <section class="kpis" id="kpis" aria-label="Ключевые показатели">
+      <article class="kpi">
+        <span class="kpi__label">Объявлений в выборке</span>
+        <strong class="kpi__value" id="kpi-total">—</strong>
+        <span class="kpi__hint">из ~105 000 на сайте</span>
+      </article>
+      <article class="kpi">
+        <span class="kpi__label">Средняя цена</span>
+        <strong class="kpi__value" id="kpi-avg-price">—</strong>
+        <span class="kpi__hint">в долларах США</span>
+      </article>
+      <article class="kpi">
+        <span class="kpi__label">Медианная цена</span>
+        <strong class="kpi__value" id="kpi-median-price">—</strong>
+        <span class="kpi__hint">устойчива к выбросам</span>
+      </article>
+      <article class="kpi">
+        <span class="kpi__label">Средний год</span>
+        <strong class="kpi__value" id="kpi-avg-year">—</strong>
+        <span class="kpi__hint">возраст автопарка</span>
+      </article>
+      <article class="kpi">
+        <span class="kpi__label">Средний пробег</span>
+        <strong class="kpi__value" id="kpi-avg-mileage">—</strong>
+        <span class="kpi__hint">километров</span>
+      </article>
+      <article class="kpi kpi--accent">
+        <span class="kpi__label">Доля электро</span>
+        <strong class="kpi__value" id="kpi-electric">—</strong>
+        <span class="kpi__hint">электромобилей</span>
+      </article>
+    </section>
+
+    <p class="insight" id="insight" aria-live="polite"></p>
+
+    <section class="panel filters" aria-label="Фильтры">
+      <div class="filters__head">
+        <h2>Срез данных</h2>
+        <div class="filters__actions">
+          <button class="btn btn--ghost" id="btn-reset" type="button">Сбросить</button>
+          <a class="btn btn--primary" id="btn-export" href="#" download>Экспорт CSV</a>
+        </div>
+      </div>
+      <div class="filters__grid">
+        <label class="field">
+          <span>Марка</span>
+          <select id="f-brand"><option value="">Все марки</option></select>
+        </label>
+        <label class="field">
+          <span>Кузов</span>
+          <select id="f-body"><option value="">Любой кузов</option></select>
+        </label>
+        <label class="field">
+          <span>Двигатель</span>
+          <select id="f-fuel"><option value="">Любой</option></select>
+        </label>
+        <label class="field">
+          <span>Год, от</span>
+          <input id="f-year-min" type="number" inputmode="numeric" placeholder="1990" />
+        </label>
+        <label class="field">
+          <span>Год, до</span>
+          <input id="f-year-max" type="number" inputmode="numeric" placeholder="2026" />
+        </label>
+        <label class="field">
+          <span>Цена от, $</span>
+          <input id="f-price-min" type="number" inputmode="numeric" placeholder="0" />
+        </label>
+        <label class="field">
+          <span>Цена до, $</span>
+          <input id="f-price-max" type="number" inputmode="numeric" placeholder="200 000" />
+        </label>
+        <label class="field">
+          <span>Пробег до, км</span>
+          <input id="f-mileage-max" type="number" inputmode="numeric" placeholder="500 000" />
+        </label>
+        <label class="field field--wide">
+          <span>Поиск по модели</span>
+          <input id="f-q" type="search" placeholder="Например, Passat или iX" autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>Сортировка</span>
+          <select id="f-sort"></select>
+        </label>
+      </div>
+    </section>
+
+    <section class="charts" id="charts" aria-label="Графики">
+      <article class="panel chart chart--span-8">
+        <header class="chart__head">
+          <h2>Распределение цен</h2>
+          <span class="chart__sub">сколько авто в каждой ценовой корзине, USD</span>
+        </header>
+        <div class="chart__canvas" id="chart-price"></div>
+      </article>
+
+      <article class="panel chart chart--span-4">
+        <header class="chart__head">
+          <h2>Ценовые сегменты</h2>
+          <span class="chart__sub">доля рынка по бюджету</span>
+        </header>
+        <div class="chart__canvas" id="chart-segments"></div>
+      </article>
+
+      <article class="panel chart chart--span-6">
+        <header class="chart__head">
+          <h2>Средняя цена по маркам</h2>
+          <span class="chart__sub">топ-12 марок в выборке</span>
+        </header>
+        <div class="chart__canvas chart__canvas--tall" id="chart-brands"></div>
+      </article>
+
+      <article class="panel chart chart--span-6">
+        <header class="chart__head">
+          <h2>Структура кузовов</h2>
+          <span class="chart__sub">что покупают в Беларуси</span>
+        </header>
+        <div class="chart__canvas chart__canvas--tall" id="chart-body"></div>
+      </article>
+
+      <article class="panel chart chart--span-8">
+        <header class="chart__head">
+          <h2>Цена и возраст</h2>
+          <span class="chart__sub">средняя цена по годам + объём предложения</span>
+        </header>
+        <div class="chart__canvas" id="chart-year"></div>
+      </article>
+
+      <article class="panel chart chart--span-4">
+        <header class="chart__head">
+          <h2>Тип двигателя</h2>
+          <span class="chart__sub">доля объявлений</span>
+        </header>
+        <div class="chart__canvas" id="chart-fuel"></div>
+      </article>
+
+      <article class="panel chart chart--span-8">
+        <header class="chart__head">
+          <h2>Цена против пробега</h2>
+          <span class="chart__sub">каждый точка — автомобиль</span>
+        </header>
+        <div class="chart__canvas" id="chart-scatter"></div>
+      </article>
+
+      <article class="panel chart chart--span-4">
+        <header class="chart__head">
+          <h2>Сколько висят в продаже</h2>
+          <span class="chart__sub">дней с момента публикации</span>
+        </header>
+        <div class="chart__canvas" id="chart-days"></div>
+      </article>
+
+      <article class="panel chart chart--span-12">
+        <header class="chart__head">
+          <h2>География предложения</h2>
+          <span class="chart__sub">топ-10 городов</span>
+        </header>
+        <div class="chart__canvas chart__canvas--short" id="chart-locations"></div>
+      </article>
+    </section>
+
+    <section class="panel deals" id="deals-section" aria-label="Ниже медианы по марке">
+      <header class="chart__head table-panel__head">
+        <div>
+          <h2>Ниже медианы по марке</h2>
+          <span class="chart__sub" id="deals-total">прозрачная эвристика, не оценка стоимости</span>
+        </div>
+        <div class="pager">
+          <a class="btn btn--ghost" id="btn-deals-export" href="#" title="Скачать все объявления ниже медианы (CSV)">CSV</a>
+          <button class="btn btn--ghost" id="btn-deals-prev" type="button" aria-label="Предыдущая страница">←</button>
+          <span id="deals-page-info">1 / 1</span>
+          <button class="btn btn--ghost" id="btn-deals-next" type="button" aria-label="Следующая страница">→</button>
+        </div>
+      </header>
+      <div class="deals__grid" id="deals"></div>
+    </section>
+
+    <section class="panel table-panel" aria-label="Объявления">
+      <header class="chart__head table-panel__head">
+        <div>
+          <h2>Объявления</h2>
+          <span class="chart__sub" id="table-total">—</span>
+        </div>
+        <div class="pager">
+          <button class="btn btn--ghost" id="btn-prev" type="button" aria-label="Предыдущая страница">←</button>
+          <span id="page-info">1 / 1</span>
+          <button class="btn btn--ghost" id="btn-next" type="button" aria-label="Следующая страница">→</button>
+        </div>
+      </header>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Автомобиль</th>
+              <th>Год</th>
+              <th>Пробег</th>
+              <th>Двигатель</th>
+              <th>Город</th>
+              <th class="ta-right">Цена</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div>
+        <strong>AV.BY Market Pulse</strong>
+        <span>Демо-проект: парсинг cars.av.by → FastAPI → интерактивные графики.</span>
+      </div>
+      <div class="footer__meta">
+        <span id="footer-source">Источник: cars.av.by</span>
+        <span id="footer-date">—</span>
+        <span>автообновление в 13:00</span>
+      </div>
+    </footer>
+  </main>
+
+  <div class="loading" id="loading" aria-hidden="true"><span></span></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="vendor/echarts.min.js"></script>
+  <script src="analytics.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

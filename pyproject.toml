@@ -1,0 +1,9 @@
+[project]
+name = "avby-market-pulse"
+version = "1.0.0"
+description = "Analytics dashboard for the Belarusian used-car market scraped from cars.av.by"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
