@@ -3,10 +3,21 @@ name: Refresh dashboard
 # 10:00 UTC = 13:00 Minsk (UTC+3, no DST). GitHub's scheduler can be a few
 # minutes late and occasionally skips a run under load; workflow_dispatch is
 # there for manual refreshes.
+#
+# The push trigger is a convenience: it starts a run from any commit to main
+# (so the first run needs no "Run workflow" click), and keeps the published
+# site in sync after a code change. It cannot loop - commits pushed with the
+# built-in GITHUB_TOKEN never trigger workflows - and paths-ignore keeps the
+# bot's own data/docs commits from queueing extra runs.
 on:
   schedule:
     - cron: "0 10 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "data/**"
 
 permissions:
   contents: write
