@@ -32,9 +32,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -51,8 +51,22 @@ jobs:
         id: scrape
         # A blocked or throttled scrape must not take the site down: the
         # previous snapshot is still committed, so we rebuild from it.
+        # cars.av.by answers datacenter IPs with a non-standard 468, so the
+        # scrape is retried with a growing pause before we give up.
         continue-on-error: true
-        run: python -m scraper.cli --pages 50
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::scrape attempt $attempt"
+            if python -m scraper.cli --pages 50; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::attempt $attempt failed, retrying in $((attempt * 45))s"
+            sleep $((attempt * 45))
+          done
+          echo "::error::scrape failed after 3 attempts - publishing the previous snapshot"
+          exit 1
 
       - name: Build static site
         run: python scripts/build-static.py
