@@ -11,7 +11,9 @@ Each page contains 25 adverts. Pagination is ``?page=N``.
 
 from __future__ import annotations
 
+import http.cookiejar
 import json
+import random
 import re
 import time
 import urllib.error
@@ -156,20 +158,64 @@ def parse_page(html: str) -> tuple[list[Car], dict[str, Any]]:
     return cars, pagination
 
 
+_OPENER: urllib.request.OpenerDirector | None = None
+
+
+def _opener() -> urllib.request.OpenerDirector:
+    """Shared opener that keeps cookies between requests.
+
+    cars.av.by is behind a bot filter that answers unfamiliar clients with a
+    non-standard HTTP 468. It sets cookies on the first visit, so starting the
+    session at the homepage makes the listing requests look like a browser.
+    """
+    global _OPENER
+    if _OPENER is None:
+        _OPENER = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        )
+    return _OPENER
+
+
+def warm_up(timeout: float = 15.0) -> None:
+    """Best-effort homepage visit so the cookie jar is primed before paging."""
+    request = urllib.request.Request(BASE_URL + "/", headers=HEADERS)
+    try:
+        with _opener().open(request, timeout=timeout) as response:
+            response.read(64)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        pass  # the filter request below reports the real problem
+
+
 def fetch_page(page: int, timeout: float = 25.0, retries: int = 3) -> str:
     """Fetch the raw HTML for one filter page, with retries."""
     url = FILTER_URL.format(page=page)
-    last_error: Exception | None = None
+    last_error: Any = None
     for attempt in range(1, retries + 1):
         request = urllib.request.Request(url, headers=HEADERS)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with _opener().open(request, timeout=timeout) as response:
                 charset = response.headers.get_content_charset() or "utf-8"
                 return response.read().decode(charset, errors="replace")
+        except urllib.error.HTTPError as exc:
+            # The site's bot filter answers unfamiliar clients with a
+            # non-standard 468 and a short HTML body; keep it for the log,
+            # because "HTTP Error 468:" alone tells us nothing.
+            try:
+                snippet = exc.read(160).decode("utf-8", "replace")
+                snippet = " ".join(snippet.split())
+            except Exception:  # pragma: no cover - body already consumed
+                snippet = ""
+            last_error = f"HTTP {exc.code} {exc.reason}".strip()
+            if snippet:
+                last_error += f" - {snippet}"
+            if exc.code not in (429, 468) and exc.code < 500:
+                break  # a retry cannot fix 403/404
+            if attempt < retries:
+                time.sleep(2.0 * attempt + random.uniform(0, 1.0))
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last_error = exc
             if attempt < retries:
-                time.sleep(1.5 * attempt)
+                time.sleep(1.5 * attempt + random.uniform(0, 1.0))
     raise ScrapeError(f"failed to fetch {url}: {last_error}")
 
 
@@ -185,6 +231,7 @@ def scrape(
     used by the CLI for progress reporting.
     """
     seen: dict[int, Car] = {}
+    warm_up()
     for offset in range(pages):
         page = start_page + offset
         cars, pagination = parse_page(fetch_page(page))
