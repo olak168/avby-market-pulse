@@ -7,7 +7,7 @@ const DEALS_PAGE_SIZE = 12;
 const REFRESH_MS = 60_000;
 const PALETTE = ["#818cf8", "#22d3ee", "#fbbf24", "#34d399", "#fb7185", "#a78bfa", "#38bdf8", "#f472b6", "#4ade80", "#facc15"];
 
-const state = { page: 1, filters: {}, loading: false, scrapedAt: null, dealsPage: 1, mode: "api" };
+const state = { page: 1, filters: {}, loading: false, scrapedAt: null, dealsPage: 1, mode: "api", models: [] };
 const charts = {};
 
 const nf = new Intl.NumberFormat("ru-RU");
@@ -23,6 +23,17 @@ const compact = (n) => {
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const safeUrl = (u) => (typeof u === "string" && /^https?:\/\//i.test(u) ? u : "#");
+
+/* Scoring: 0..10 = up to 5 for a newer year + up to 5 for lower mileage. */
+const scoreText = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(1) : "0.0");
+function scorePill(item, withLabel) {
+  const score = Number(item.score) || 0;
+  const hint =
+    `Скоринг ${scoreText(score)} из 10: ` +
+    `${scoreText(item.score_year)} за год + ${scoreText(item.score_mileage)} за пробег`;
+  const label = withLabel ? '<span class="score-pill__label">Балл</span> ' : "";
+  return `<span class="score-pill" title="${esc(hint)}">${label}${scoreText(score)}</span>`;
+}
 
 const TOOLTIP = {
   backgroundColor: "rgba(10,14,26,0.96)",
@@ -472,9 +483,26 @@ function renderLocations(data) {
 function renderDeals(page) {
   state.dealsPage = page.page;
   const wrap = document.getElementById("deals");
-  document.getElementById("deals-total").textContent = page.total
-    ? `${nf.format(page.total)} объявлений ниже медианы своей марки`
-    : "прозрачная эвристика, не оценка стоимости";
+  const scope = page.scope || { scope: "brand", brand: null, model: null, min_count: 5, group_count: null };
+  const byModel = scope.scope === "model" && scope.model;
+  const modelName = [scope.brand, scope.model].filter(Boolean).join(" ");
+  const title = byModel ? "Ниже медианы по марке и модели" : "Ниже медианы по марке";
+  document.getElementById("deals-title").textContent = title;
+  document.getElementById("deals-section").setAttribute("aria-label", title);
+
+  let subtitle;
+  if (page.total) {
+    subtitle = byModel
+      ? `${nf.format(page.total)} объявлений ниже медианы ${modelName}`
+      : `${nf.format(page.total)} объявлений ниже медианы своей марки`;
+  } else if (byModel && scope.group_count != null && scope.group_count < scope.min_count) {
+    subtitle = `у ${modelName} всего ${nf.format(scope.group_count)} объявлений — для медианы нужно минимум ${scope.min_count}`;
+  } else if (byModel) {
+    subtitle = `нет объявлений ${modelName} ниже медианы модели`;
+  } else {
+    subtitle = "прозрачная эвристика, не оценка стоимости";
+  }
+  document.getElementById("deals-total").textContent = subtitle;
   document.getElementById("deals-page-info").textContent = `${page.page} / ${page.pages}`;
   document.getElementById("btn-deals-prev").disabled = page.page <= 1;
   document.getElementById("btn-deals-next").disabled = page.page >= page.pages;
@@ -488,12 +516,17 @@ function renderDeals(page) {
       const photo = d.photo
         ? `<img class="deal__img" loading="lazy" src="${esc(d.photo)}" alt="${esc(d.brand + " " + d.model)}" />`
         : `<div class="deal__img deal__img--empty">${esc((d.brand || "?")[0])}</div>`;
+      const medianLabel = d.median_scope === "model" ? "медиана модели" : "медиана марки";
       return `<a class="deal" href="${esc(safeUrl(d.url))}" target="_blank" rel="noopener">
         ${photo}
         <div class="deal__body">
           <span class="deal__name">${esc(d.brand)} ${esc(d.model)}</span>
           <span class="deal__meta">${esc(d.year ?? "—")} · ${km(d.mileage_km)} · ${esc(d.location || "—")}</span>
-          <span class="deal__price">${money(d.price_usd)}</span>
+          <span class="deal__median">${medianLabel} ${money(d.brand_median_usd)}</span>
+          <span class="deal__footer">
+            <span class="deal__price">${money(d.price_usd)}</span>
+            ${scorePill(d, true)}
+          </span>
         </div>
         <span class="deal__badge">−${d.discount_pct}%</span>
       </a>`;
@@ -528,6 +561,7 @@ function renderTable(page) {
         </td>
         <td>${esc(c.year ?? "—")}</td>
         <td>${km(c.mileage_km)}</td>
+        <td class="ta-right">${scorePill(c)}</td>
         <td>${esc(engine || "—")}</td>
         <td>${esc(c.location || "—")}</td>
         <td class="ta-right price-cell">${money(c.price_usd)}<small>${c.price_byn ? nf.format(c.price_byn) + " BYN" : ""}</small></td>
@@ -652,6 +686,7 @@ function number(id) {
 function currentFilters() {
   return {
     brand: value("f-brand"),
+    model: value("f-model"),
     body: value("f-body"),
     fuel: value("f-fuel"),
     year_min: number("f-year-min"),
@@ -805,10 +840,33 @@ async function loadFilters() {
   fill("f-brand", data.brands, "Все марки", (i) => `${i.name} (${i.count})`);
   fill("f-body", data.bodies, "Любой кузов", (i) => `${i.name} (${i.count})`);
   fill("f-fuel", data.fuels, "Любой", (i) => `${i.name} (${i.count})`);
+  state.models = data.models || [];
+  populateModels(value("f-brand"));
   document.getElementById("f-year-min").placeholder = data.year_min ?? "1990";
   document.getElementById("f-year-max").placeholder = data.year_max ?? "2026";
   document.getElementById("f-price-min").placeholder = data.price_min ?? "0";
   document.getElementById("f-price-max").placeholder = data.price_max ?? "200000";
+}
+
+/* The model list depends on the brand ("X5" only exists for BMW), so the
+ * select stays disabled until a brand is chosen. */
+function populateModels(brand) {
+  const select = document.getElementById("f-model");
+  const previous = select.value;
+  const models = (state.models || []).filter((m) => m.brand === brand);
+  if (!brand || !models.length) {
+    select.innerHTML = `<option value="">${brand ? "Нет моделей" : "Сначала выберите марку"}</option>`;
+    select.value = "";
+    select.disabled = true;
+    return;
+  }
+  select.innerHTML =
+    `<option value="">Все модели</option>` +
+    models
+      .map((m) => `<option value="${esc(m.name)}">${esc(m.name)} (${m.count})</option>`)
+      .join("");
+  select.disabled = false;
+  select.value = models.some((m) => m.name === previous) ? previous : "";
 }
 
 async function loadMeta() {
@@ -837,7 +895,12 @@ function bindFilters() {
   };
   const debounced = debounce(onChange, 300);
 
-  ["f-brand", "f-body", "f-fuel", "f-sort"].forEach((id) =>
+  document.getElementById("f-brand").addEventListener("change", () => {
+    // A brand switch invalidates the previous model, so refresh the list first.
+    populateModels(value("f-brand"));
+    onChange();
+  });
+  ["f-model", "f-body", "f-fuel", "f-sort"].forEach((id) =>
     document.getElementById(id).addEventListener("change", onChange)
   );
   ["f-year-min", "f-year-max", "f-price-min", "f-price-max", "f-mileage-max"].forEach((id) =>
@@ -849,9 +912,10 @@ function bindFilters() {
   });
 
   document.getElementById("btn-reset").addEventListener("click", () => {
-    ["f-brand", "f-body", "f-fuel", "f-year-min", "f-year-max", "f-price-min", "f-price-max", "f-mileage-max", "f-q"].forEach(
+    ["f-brand", "f-model", "f-body", "f-fuel", "f-year-min", "f-year-max", "f-price-min", "f-price-max", "f-mileage-max", "f-q"].forEach(
       (id) => (document.getElementById(id).value = "")
     );
+    populateModels("");
     document.getElementById("f-sort").value = "relevance";
     state.page = 1;
     loadDashboard();

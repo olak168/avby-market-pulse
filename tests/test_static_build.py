@@ -35,6 +35,8 @@ def test_build_static_produces_self_contained_site(builder, tmp_path):
     assert (out / "vendor" / "echarts.min.js").is_file()
     assert (out / ".nojekyll").is_file()
     assert 'data-mode="static"' in (out / "index.html").read_text(encoding="utf-8")
+    # Pages caches assets, so the built page must point at fingerprinted URLs.
+    assert "app.js?v=" in (out / "index.html").read_text(encoding="utf-8")
 
     published = json.loads((out / "data" / "cars.json").read_text(encoding="utf-8"))
     assert published["count"] == dataset["count"]

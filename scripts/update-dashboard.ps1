@@ -65,8 +65,14 @@ try {
     $scraperArgs = @('-m', 'scraper.cli', '--pages', $Pages, '--delay', $Delay)
     if ($Out) { $scraperArgs += @('--out', $Out) }
 
+    # Native stderr becomes an ErrorRecord, and with $ErrorActionPreference='Stop'
+    # the very first traceback line aborts the script - losing the rest of the
+    # output. Keep 'Continue' around the call so the whole traceback is logged.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $output = & $python @scraperArgs 2>&1
     $code = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
     $output | ForEach-Object { Write-Log ([string]$_) }
 
     if ($code -ne 0) { throw ('scraper exited with code {0}' -f $code) }
@@ -77,8 +83,11 @@ try {
 
     if ($Build -and -not $Out) {
         Write-Log 'Rebuilding docs/ for GitHub Pages ...'
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         $buildOutput = & $python (Join-Path $ProjectRoot 'scripts\build-static.py') 2>&1
         $buildCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousPreference
         $buildOutput | ForEach-Object { Write-Log ([string]$_) }
         if ($buildCode -ne 0) { throw ('build-static exited with code {0}' -f $buildCode) }
     }

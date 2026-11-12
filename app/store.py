@@ -51,10 +51,23 @@ def get_filter_options(cars: list[dict[str, Any]]) -> dict[str, Any]:
     brands = Counter(c["brand"] for c in cars if c.get("brand"))
     bodies = Counter(c["body_type"] for c in cars if c.get("body_type"))
     fuels = Counter(c["engine_type"] for c in cars if c.get("engine_type"))
+    # Model names are only unique inside a brand ("X5" belongs to BMW), so the
+    # pair is the key the dashboard's cascading "Модель" select works with.
+    models = Counter(
+        (c["brand"], c["model"])
+        for c in cars
+        if c.get("brand") and c.get("model")
+    )
     years = [c["year"] for c in cars if c.get("year")]
     prices = [c["price_usd"] for c in cars if c.get("price_usd")]
     return {
         "brands": [{"name": name, "count": n} for name, n in brands.most_common()],
+        "models": [
+            {"brand": brand, "name": model, "count": n}
+            for (brand, model), n in sorted(
+                models.items(), key=lambda item: (item[0][0], -item[1], item[0][1])
+            )
+        ],
         "bodies": [{"name": name, "count": n} for name, n in bodies.most_common()],
         "fuels": [{"name": name, "count": n} for name, n in fuels.most_common()],
         "year_min": min(years) if years else None,

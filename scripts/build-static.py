@@ -26,6 +26,10 @@ STATIC_DIR = ROOT / "app" / "static"
 DATASET = ROOT / "data" / "cars.json"
 OUT_DIR = ROOT / "docs"
 
+sys.path.insert(0, str(ROOT))
+
+from app.versioning import stamp_assets  # noqa: E402  (needs ROOT on sys.path)
+
 # Files that must never end up in the published site.
 SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store", "Thumbs.db")
 
@@ -105,7 +109,9 @@ def build_static(dataset_path: Path = DATASET, out_dir: Path = OUT_DIR, force: b
         if marker not in html:
             raise RuntimeError(f'{index}: <html lang="ru"> not found - cannot mark the static build')
         html = html.replace(marker, '<html lang="ru" data-mode="static">', 1)
-        index.write_text(html, encoding="utf-8")
+    # Pages caches assets for ~10 minutes, so a rebuilt app.js would otherwise
+    # keep rendering the previous UI; the content hash makes the URL change.
+    index.write_text(stamp_assets(html, out_dir), encoding="utf-8")
 
     data_dir = out_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)

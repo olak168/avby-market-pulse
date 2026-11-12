@@ -19,8 +19,67 @@
     { id: "mileage_asc", label: "Пробег: меньше", key: (c) => c.mileage_km || 0 },
     { id: "mileage_desc", label: "Пробег: больше", key: (c) => -(c.mileage_km || 0) },
     { id: "fresh", label: "Дольше всего в продаже", key: (c) => -(c.days_on_sale || 0) },
+    { id: "score_desc", label: "В порядке убывания скорингового балла", key: (c) => -(c.score || 0) },
+    {
+      id: "price_score_desc",
+      label: "В порядке убывания цены и скорингового балла",
+      // Price first, score as the tie-breaker inside the same price.
+      key: (c) => [-(c.price_usd || 0), -(c.score || 0)],
+    },
   ];
   const SORT_KEYS = new Map(SORT_OPTIONS.map((o) => [o.id, o.key]));
+
+  /* A sort key is either a number or an array of numbers (primary key, then
+   * tie-breakers), so the comparator walks the array field by field. */
+  function compareByKey(key) {
+    return (a, b) => {
+      const ka = key(a);
+      const kb = key(b);
+      if (Array.isArray(ka)) {
+        for (let i = 0; i < ka.length; i += 1) {
+          if (ka[i] !== kb[i]) return ka[i] - kb[i];
+        }
+        return 0;
+      }
+      return ka - kb;
+    };
+  }
+
+  /* Each half of the 0..10 score: up to 5 points for a newer year, up to 5
+   * for lower mileage. Both scales are linear over the whole dataset, so a
+   * listing keeps the same score no matter which filters are active. */
+  const SCORE_MAX = 5;
+
+  function scoreBounds(cars) {
+    const years = cars.filter((c) => c.year).map((c) => c.year);
+    const kms = cars.filter((c) => c.mileage_km != null).map((c) => c.mileage_km);
+    if (!years.length || !kms.length) return null;
+    return {
+      yLo: Math.min(...years),
+      yHi: Math.max(...years),
+      kLo: Math.min(...kms),
+      kHi: Math.max(...kms),
+    };
+  }
+
+  function scale(value, low, high, reverse = false) {
+    if (high <= low) return SCORE_MAX;
+    let ratio = (value - low) / (high - low);
+    if (reverse) ratio = 1 - ratio;
+    return round1(SCORE_MAX * Math.min(1, Math.max(0, ratio)));
+  }
+
+  function withScore(cars, reference) {
+    const bounds = scoreBounds(reference || cars);
+    return cars.map((car) => {
+      const item = Object.assign({}, car);
+      item.score_year = bounds && car.year ? scale(car.year, bounds.yLo, bounds.yHi) : 0;
+      item.score_mileage =
+        bounds && car.mileage_km != null ? scale(car.mileage_km, bounds.kLo, bounds.kHi, true) : 0;
+      item.score = round1(item.score_year + item.score_mileage);
+      return item;
+    });
+  }
 
   const PRICE_BUCKETS = [
     [0, 3000, "до $3k"],
@@ -47,6 +106,7 @@
     ["brand", "Марка"],
     ["model", "Модель"],
     ["year", "Год"],
+    ["score", "Балл"],
     ["price_usd", "Цена, USD"],
     ["price_byn", "Цена, BYN"],
     ["mileage_km", "Пробег, км"],
@@ -69,8 +129,9 @@
     ["brand", "Марка"],
     ["model", "Модель"],
     ["year", "Год"],
+    ["score", "Балл"],
     ["price_usd", "Цена, USD"],
-    ["brand_median_usd", "Медиана марки, USD"],
+    ["brand_median_usd", "Медиана, USD"],
     ["discount_pct", "Ниже медианы, %"],
     ["mileage_km", "Пробег, км"],
     ["engine_type", "Двигатель"],
@@ -98,6 +159,7 @@
     const f = filters || {};
     let result = cars;
     if (f.brand) result = result.filter((c) => c.brand === f.brand);
+    if (f.model) result = result.filter((c) => c.model === f.model);
     if (f.body) result = result.filter((c) => c.body_type === f.body);
     if (f.fuel) result = result.filter((c) => c.engine_type === f.fuel);
     if (f.year_min != null) result = result.filter((c) => (c.year || 0) >= f.year_min);
@@ -115,7 +177,8 @@
     }
 
     const key = SORT_KEYS.get(f.sort);
-    if (key) result = result.slice().sort((a, b) => key(a) - key(b));
+    result = withScore(result, cars);
+    if (key) result = result.slice().sort(compareByKey(key));
     return result;
   }
 
@@ -291,46 +354,104 @@
     return points;
   }
 
-  function belowBrandMedian(cars, minBrandCount = 5, sort = "relevance") {
-    const groups = groupBy(cars, "brand");
+  function belowBrandMedian(
+    cars,
+    minBrandCount = 5,
+    sort = "relevance",
+    reference,
+    model,
+    minModelCount = 3
+  ) {
+    // Medians come from `reference` (the full dataset), so an active filter
+    // cannot raise a brand's median and let above-median cars into the block.
+    // With a model selected the median is the brand+model pair's median, so
+    // the block answers "ниже медианы по марке и модели".
+    const basis = reference || cars;
+    const scope = model ? "model" : "brand";
+    const minCount = model ? minModelCount : minBrandCount;
+    const keyOf = (car) => {
+      if (!car.brand || !car.price_usd) return null;
+      if (scope === "model") return car.model ? `${car.brand}\u0000${car.model}` : null;
+      return car.brand;
+    };
+
+    const groups = new Map();
+    for (const car of basis) {
+      const key = keyOf(car);
+      if (key == null) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(car);
+    }
     const medians = new Map();
-    for (const [brand, items] of groups) {
+    for (const [key, items] of groups) {
       const prices = items.filter((c) => c.price_usd).map((c) => c.price_usd);
-      if (items.length >= minBrandCount && prices.length) medians.set(brand, median(prices));
+      if (items.length >= minCount && prices.length) medians.set(key, median(prices));
     }
 
     const scored = [];
     for (const car of cars) {
-      const brand = car.brand;
+      const key = keyOf(car);
       const price = car.price_usd;
-      if (!medians.has(brand) || !price) continue;
-      const brandMedian = medians.get(brand);
-      const discount = ((brandMedian - price) / brandMedian) * 100;
+      if (key == null || !medians.has(key) || !price) continue;
+      const groupMedian = medians.get(key);
+      const discount = ((groupMedian - price) / groupMedian) * 100;
       if (discount <= 0) continue;
       scored.push({
         id: car.id,
-        brand,
+        brand: car.brand,
         model: car.model,
         year: car.year,
         mileage_km: car.mileage_km,
         price_usd: price,
         price_byn: car.price_byn,
         discount_pct: round1(discount),
-        brand_median_usd: round1(brandMedian),
+        brand_median_usd: round1(groupMedian),
+        median_scope: scope,
         engine_type: car.engine_type,
         body_type: car.body_type,
         days_on_sale: car.days_on_sale,
+        score: car.score,
+        score_year: car.score_year,
+        score_mileage: car.score_mileage,
         photo: car.photo,
         url: car.url,
         location: car.location,
       });
     }
-    // Default: biggest gap to the brand median first. A chosen sort key
-    // re-orders the same rows exactly like the listings table.
+    // Default: biggest gap to the median first. A chosen sort key re-orders
+    // the same rows exactly like the listings table.
     scored.sort((a, b) => b.discount_pct - a.discount_pct);
     const key = SORT_KEYS.get(sort);
-    if (key) scored.sort((a, b) => key(a) - key(b));
+    if (key) scored.sort(compareByKey(key));
     return scored;
+  }
+
+  /* What the "below median" block compares against: the brand, or the
+   * brand+model pair when the model filter is active. `group_count` is how
+   * many such listings exist in the full dataset, so an empty block can
+   * explain itself. */
+  function dealsScope(filters, reference, minModelCount = 3) {
+    const f = filters || {};
+    const model = f.model || null;
+    const brand = f.brand || null;
+    const scope = model ? "model" : "brand";
+    let groupCount = null;
+    if (reference) {
+      if (model) {
+        groupCount = reference.filter(
+          (c) => c.model === model && (!brand || c.brand === brand)
+        ).length;
+      } else if (brand) {
+        groupCount = reference.filter((c) => c.brand === brand).length;
+      }
+    }
+    return {
+      scope,
+      brand,
+      model,
+      min_count: model ? minModelCount : 5,
+      group_count: groupCount,
+    };
   }
 
   function paginate(cars, page = 1, pageSize = 20) {
@@ -351,7 +472,11 @@
 
   function buildDashboard(cars, page = 1, pageSize = 12, filters = {}) {
     const filtered = filterCars(cars, filters);
-    const deals = belowBrandMedian(filtered, 5, filters.sort || "relevance");
+    // Medians always come from the full dataset, like the 0..10 score.
+    const model = filters.model || null;
+    const deals = belowBrandMedian(filtered, 5, filters.sort || "relevance", cars, model);
+    const dealsPage = paginate(deals, 1, 12);
+    dealsPage.scope = dealsScope(filters, cars);
     return {
       summary: summary(filtered),
       charts: {
@@ -365,7 +490,7 @@
         price_vs_mileage: priceVsMileage(filtered),
         by_location: byCategory(filtered, "location", 10),
       },
-      deals: paginate(deals, 1, 12),
+      deals: dealsPage,
       best_deals: deals.slice(0, 8),
       cars: paginate(filtered, page, pageSize),
     };
@@ -373,11 +498,14 @@
 
   function buildDeals(cars, page = 1, pageSize = 12, filters = {}) {
     const f = filters || {};
-    return paginate(
-      belowBrandMedian(filterCars(cars, f), 5, f.sort || "relevance"),
+    const model = f.model || null;
+    const result = paginate(
+      belowBrandMedian(filterCars(cars, f), 5, f.sort || "relevance", cars, model),
       page,
       pageSize
     );
+    result.scope = dealsScope(f, cars);
+    return result;
   }
 
   function filterOptions(cars) {
@@ -394,8 +522,22 @@
     };
     const years = cars.filter((c) => c.year).map((c) => c.year);
     const prices = cars.filter((c) => c.price_usd).map((c) => c.price_usd);
+    // Model names are only unique inside a brand, so the select is keyed by
+    // the brand+model pair.
+    const models = new Map();
+    for (const car of cars) {
+      if (!car.brand || !car.model) continue;
+      const key = `${car.brand}\u0000${car.model}`;
+      const entry = models.get(key) || { brand: car.brand, name: car.model, count: 0 };
+      entry.count += 1;
+      models.set(key, entry);
+    }
     return {
       brands: count("brand"),
+      models: Array.from(models.values()).sort(
+        (a, b) =>
+          a.brand.localeCompare(b.brand) || b.count - a.count || a.name.localeCompare(b.name)
+      ),
       bodies: count("body_type"),
       fuels: count("engine_type"),
       year_min: years.length ? Math.min(...years) : null,
@@ -421,7 +563,10 @@
   const exportCars = (cars, filters) => toCsv(CARS_COLUMNS, filterCars(cars, filters));
   const exportDeals = (cars, filters) => {
     const f = filters || {};
-    return toCsv(DEAL_COLUMNS, belowBrandMedian(filterCars(cars, f), 5, f.sort || "relevance"));
+    return toCsv(
+      DEAL_COLUMNS,
+      belowBrandMedian(filterCars(cars, f), 5, f.sort || "relevance", cars, f.model || null)
+    );
   };
 
   global.AvbyAnalytics = {
@@ -429,6 +574,7 @@
     filterCars,
     summary,
     belowBrandMedian,
+    dealsScope,
     paginate,
     buildDashboard,
     buildDeals,

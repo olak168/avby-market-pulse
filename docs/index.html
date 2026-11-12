@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AV.BY Market Pulse — аналитика авторынка Беларуси</title>
   <meta name="description" content="Интерактивный дашборд рынка б/у автомобилей Беларуси по данным cars.av.by: цены, марки, пробеги, годы и лучшие предложения." />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=603a0c0ed3" />
 </head>
 <body>
   <div class="bg-grid" aria-hidden="true"></div>
@@ -97,6 +97,12 @@
           <select id="f-brand"><option value="">Все марки</option></select>
         </label>
         <label class="field">
+          <span>Модель</span>
+          <select id="f-model" disabled>
+            <option value="">Сначала выберите марку</option>
+          </select>
+        </label>
+        <label class="field">
           <span>Кузов</span>
           <select id="f-body"><option value="">Любой кузов</option></select>
         </label>
@@ -124,13 +130,13 @@
           <span>Пробег до, км</span>
           <input id="f-mileage-max" type="number" inputmode="numeric" placeholder="500 000" />
         </label>
-        <label class="field field--wide">
-          <span>Поиск по модели</span>
-          <input id="f-q" type="search" placeholder="Например, Passat или iX" autocomplete="off" />
-        </label>
         <label class="field">
           <span>Сортировка</span>
           <select id="f-sort"></select>
+        </label>
+        <label class="field field--wide">
+          <span>Поиск по модели</span>
+          <input id="f-q" type="search" placeholder="Например, Passat или iX" autocomplete="off" />
         </label>
       </div>
     </section>
@@ -212,7 +218,7 @@
     <section class="panel deals" id="deals-section" aria-label="Ниже медианы по марке">
       <header class="chart__head table-panel__head">
         <div>
-          <h2>Ниже медианы по марке</h2>
+          <h2 id="deals-title">Ниже медианы по марке</h2>
           <span class="chart__sub" id="deals-total">прозрачная эвристика, не оценка стоимости</span>
         </div>
         <div class="pager">
@@ -244,6 +250,7 @@
               <th>Автомобиль</th>
               <th>Год</th>
               <th>Пробег</th>
+              <th class="ta-right" title="Скоринг 0–10: до 5 баллов за свежий год и до 5 за меньший пробег">Балл</th>
               <th>Двигатель</th>
               <th>Город</th>
               <th class="ta-right">Цена</th>
@@ -269,8 +276,8 @@
   <div class="loading" id="loading" aria-hidden="true"><span></span></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="vendor/echarts.min.js"></script>
-  <script src="analytics.js"></script>
-  <script src="app.js"></script>
+  <script src="vendor/echarts.min.js?v=e84270bd0c"></script>
+  <script src="analytics.js?v=9e1a298dfe"></script>
+  <script src="app.js?v=24ed2d88e9"></script>
 </body>
 </html>

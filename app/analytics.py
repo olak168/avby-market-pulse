@@ -21,7 +21,68 @@ SORT_OPTIONS = {
     "mileage_asc": ("Пробег: меньше", lambda c: c.get("mileage_km") or 0),
     "mileage_desc": ("Пробег: больше", lambda c: -(c.get("mileage_km") or 0)),
     "fresh": ("Дольше всего в продаже", lambda c: -(c.get("days_on_sale") or 0)),
+    "score_desc": (
+        "В порядке убывания скорингового балла",
+        lambda c: -(c.get("score") or 0),
+    ),
+    # Price first, score as the tie-breaker inside the same price.
+    "price_score_desc": (
+        "В порядке убывания цены и скорингового балла",
+        lambda c: (-(c.get("price_usd") or 0), -(c.get("score") or 0)),
+    ),
 }
+
+# Each half of the 0..10 score: up to 5 points for a newer year, up to 5 for
+# lower mileage. Both scales are linear over the whole dataset, so a listing
+# keeps the same score no matter which filters are active.
+SCORE_MAX = 5.0
+
+
+def _score_bounds(cars: list[Car]) -> tuple[float, float, float, float] | None:
+    years = [c["year"] for c in cars if c.get("year")]
+    kms = [c["mileage_km"] for c in cars if c.get("mileage_km") is not None]
+    if not years or not kms:
+        return None
+    return min(years), max(years), min(kms), max(kms)
+
+
+def _scale(value: float, low: float, high: float, reverse: bool = False) -> float:
+    """Map *value* onto 0..5; ``reverse=True`` rewards the low end."""
+    if high <= low:
+        return SCORE_MAX
+    ratio = (value - low) / (high - low)
+    if reverse:
+        ratio = 1 - ratio
+    return round(SCORE_MAX * min(1.0, max(0.0, ratio)), 1)
+
+
+def with_score(
+    cars: list[Car], reference: list[Car] | None = None
+) -> list[Car]:
+    """Return copies of *cars* carrying a 0..10 score.
+
+    ``score_year`` (0..5) rewards a newer year, ``score_mileage`` (0..5) a
+    lower mileage; ``score`` is their sum. The scale is built from
+    *reference* — the full dataset — so filtering never changes a car's score.
+    """
+    bounds = _score_bounds(reference if reference is not None else cars)
+    if bounds is None:
+        return [
+            dict(c, score=0.0, score_year=0.0, score_mileage=0.0) for c in cars
+        ]
+    y_lo, y_hi, k_lo, k_hi = bounds
+    scored: list[Car] = []
+    for car in cars:
+        item = dict(car)
+        year = car.get("year")
+        mileage = car.get("mileage_km")
+        item["score_year"] = _scale(year, y_lo, y_hi) if year else 0.0
+        item["score_mileage"] = (
+            _scale(mileage, k_lo, k_hi, reverse=True) if mileage is not None else 0.0
+        )
+        item["score"] = round(item["score_year"] + item["score_mileage"], 1)
+        scored.append(item)
+    return scored
 
 
 def _avg(values: Iterable[float]) -> float | None:
@@ -37,6 +98,7 @@ def _median(values: Iterable[float]) -> float | None:
 def filter_cars(
     cars: list[Car],
     brand: str | None = None,
+    model: str | None = None,
     body: str | None = None,
     fuel: str | None = None,
     year_min: int | None = None,
@@ -51,6 +113,8 @@ def filter_cars(
     result = cars
     if brand:
         result = [c for c in result if c.get("brand") == brand]
+    if model:
+        result = [c for c in result if c.get("model") == model]
     if body:
         result = [c for c in result if c.get("body_type") == body]
     if fuel:
@@ -75,6 +139,7 @@ def filter_cars(
             ]
 
     key = SORT_OPTIONS.get(sort, (None, None))[1]
+    result = with_score(result, reference=cars)
     if key is not None:
         result = sorted(result, key=key)
     return result
@@ -255,51 +320,86 @@ def price_vs_mileage(cars: list[Car], limit: int = 700) -> list[dict[str, Any]]:
 
 
 def below_brand_median(
-    cars: list[Car], min_brand_count: int = 5, sort: str = "relevance"
+    cars: list[Car],
+    min_brand_count: int = 5,
+    sort: str = "relevance",
+    reference: list[Car] | None = None,
+    model: str | None = None,
+    min_model_count: int = 3,
 ) -> list[dict[str, Any]]:
-    """Every car priced below the median for its own brand.
+    """Every car in *cars* priced below the median of its brand (or model).
 
-    By default the biggest gap to the brand median comes first. Passing a
-    dashboard ``sort`` key (e.g. ``price_desc``) re-orders the same rows the
-    way the listings table is ordered, so one sort selection drives both
-    blocks.
+    When a ``model`` filter is active the block narrows to one nameplate and
+    the reference median becomes that brand+model pair's median, so the block
+    answers "ниже медианы по марке и модели". Otherwise every car is compared
+    with its brand's median.
 
-    This is a transparent heuristic, not a valuation model: brands with fewer
-    than ``min_brand_count`` cars in the current selection are skipped, so a
-    single cheap outlier cannot define its own median.
+    Medians are computed from *reference* — the full dataset when the caller
+    passes it — so an active filter can never make a car look cheap: a listing
+    qualifies only when it is below the median its brand really has, not below
+    the median of whatever subset happens to be on screen. Filtering to
+    ``year_min=2024`` used to raise every brand's median and let above-median
+    cars into the block.
+
+    By default the biggest gap to the median comes first. Passing a dashboard
+    ``sort`` key (e.g. ``price_desc``) re-orders the same rows the way the
+    listings table is ordered, so one sort selection drives both blocks.
+
+    This is a transparent heuristic, not a valuation model: groups with fewer
+    than ``min_brand_count`` (brand) or ``min_model_count`` (brand+model) cars
+    in *reference* are skipped, so a single cheap outlier cannot define its own
+    median.
     """
-    groups: dict[str, list[Car]] = defaultdict(list)
-    for car in cars:
-        if car.get("brand") and car.get("price_usd"):
-            groups[car["brand"]].append(car)
+    basis = reference if reference is not None else cars
+    scope = "model" if model else "brand"
+    min_count = min_model_count if model else min_brand_count
+
+    def group_key(car: Car) -> Any:
+        brand = car.get("brand")
+        if not brand or not car.get("price_usd"):
+            return None
+        if scope == "model":
+            name = car.get("model")
+            return (brand, name) if name else None
+        return brand
+
+    groups: dict[Any, list[Car]] = defaultdict(list)
+    for car in basis:
+        key = group_key(car)
+        if key is not None:
+            groups[key].append(car)
 
     medians = {
-        brand: median([c["price_usd"] for c in items])
-        for brand, items in groups.items()
-        if len(items) >= min_brand_count
+        key: median([c["price_usd"] for c in items])
+        for key, items in groups.items()
+        if len(items) >= min_count
     }
 
     scored = []
     for car in cars:
-        brand = car.get("brand")
+        key = group_key(car)
         price = car.get("price_usd")
-        if brand in medians and price:
-            discount = (medians[brand] - price) / medians[brand] * 100
+        if key in medians and price:
+            discount = (medians[key] - price) / medians[key] * 100
             if discount > 0:
                 scored.append(
                     {
                         "id": car["id"],
-                        "brand": brand,
+                        "brand": car.get("brand"),
                         "model": car.get("model"),
                         "year": car.get("year"),
                         "mileage_km": car.get("mileage_km"),
                         "price_usd": price,
                         "price_byn": car.get("price_byn"),
                         "discount_pct": round(discount, 1),
-                        "brand_median_usd": round(medians[brand], 1),
+                        "brand_median_usd": round(medians[key], 1),
+                        "median_scope": scope,
                         "engine_type": car.get("engine_type"),
                         "body_type": car.get("body_type"),
                         "days_on_sale": car.get("days_on_sale"),
+                        "score": car.get("score"),
+                        "score_year": car.get("score_year"),
+                        "score_mileage": car.get("score_mileage"),
                         "photo": car.get("photo"),
                         "url": car.get("url"),
                         "location": car.get("location"),
@@ -311,6 +411,39 @@ def below_brand_median(
     if key is not None:
         scored.sort(key=key)
     return scored
+
+
+def deals_scope(
+    filters: dict[str, Any],
+    reference: list[Car] | None = None,
+    min_model_count: int = 3,
+) -> dict[str, Any]:
+    """Describe what the "below median" block is comparing against.
+
+    ``group_count`` is how many listings of that brand/model exist in
+    *reference* (the full dataset), so the UI can explain an empty block
+    instead of silently showing nothing.
+    """
+    model = filters.get("model") or None
+    brand = filters.get("brand") or None
+    scope = "model" if model else "brand"
+    group_count = None
+    if reference is not None:
+        if model:
+            group_count = sum(
+                1
+                for c in reference
+                if c.get("model") == model and (not brand or c.get("brand") == brand)
+            )
+        elif brand:
+            group_count = sum(1 for c in reference if c.get("brand") == brand)
+    return {
+        "scope": scope,
+        "brand": brand,
+        "model": model,
+        "min_count": min_model_count if model else 5,
+        "group_count": group_count,
+    }
 
 
 def best_deals(cars: list[Car], limit: int = 8, min_brand_count: int = 5) -> list[dict[str, Any]]:
@@ -342,7 +475,15 @@ def build_dashboard(
     **filters: Any,
 ) -> dict[str, Any]:
     filtered = filter_cars(cars, **filters)
-    deals = below_brand_median(filtered, sort=filters.get("sort") or "relevance")
+    model = filters.get("model") or None
+    deals = below_brand_median(
+        filtered,
+        sort=filters.get("sort") or "relevance",
+        reference=cars,
+        model=model,
+    )
+    deals_page = paginate(deals, page=1, page_size=deals_page_size)
+    deals_page["scope"] = deals_scope(filters, reference=cars)
     return {
         "summary": summary(filtered),
         "charts": {
@@ -356,7 +497,7 @@ def build_dashboard(
             "price_vs_mileage": price_vs_mileage(filtered),
             "by_location": by_category(filtered, "location", limit=10),
         },
-        "deals": paginate(deals, page=1, page_size=deals_page_size),
+        "deals": deals_page,
         "best_deals": deals[:8],
         "cars": paginate(filtered, page=page, page_size=page_size),
     }
@@ -367,16 +508,23 @@ def build_deals(
     page: int = 1,
     page_size: int = 12,
     min_brand_count: int = 5,
+    min_model_count: int = 3,
     **filters: Any,
 ) -> dict[str, Any]:
-    """Paginated view over *all* cars below their brand median."""
+    """Paginated view over *all* cars below the median of their brand/model."""
     filtered = filter_cars(cars, **filters)
-    return paginate(
+    model = filters.get("model") or None
+    result = paginate(
         below_brand_median(
             filtered,
             min_brand_count=min_brand_count,
             sort=filters.get("sort") or "relevance",
+            reference=cars,
+            model=model,
+            min_model_count=min_model_count,
         ),
         page=page,
         page_size=page_size,
     )
+    result["scope"] = deals_scope(filters, reference=cars, min_model_count=min_model_count)
+    return result
