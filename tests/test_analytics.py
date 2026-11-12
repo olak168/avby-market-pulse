@@ -103,6 +103,26 @@ def test_build_deals_paginates_all_matches():
     assert {first["items"][0]["id"], second["items"][0]["id"]} == {1, 7}
 
 
+def test_below_median_follows_the_chosen_sort():
+    cars = [
+        car(id=1, brand="BMW", price_usd=10000),
+        car(id=2, brand="BMW", price_usd=20000),
+        car(id=3, brand="BMW", price_usd=25000),
+        car(id=4, brand="BMW", price_usd=26000),
+        car(id=5, brand="BMW", price_usd=30000),
+    ]
+    # Default: biggest gap to the brand median first (10k is 60% below 25k).
+    assert [d["id"] for d in analytics.below_brand_median(cars)] == [1, 2]
+    # The listings-table sort applies to the deals block as well.
+    assert [d["id"] for d in analytics.below_brand_median(cars, sort="price_desc")] == [2, 1]
+    assert [d["id"] for d in analytics.below_brand_median(cars, sort="price_asc")] == [1, 2]
+
+    deals = analytics.build_deals(cars, sort="price_desc")
+    prices = [d["price_usd"] for d in deals["items"]]
+    assert prices == sorted(prices, reverse=True)
+    assert prices[0] == 20000
+
+
 def test_build_dashboard_shape():
     data = analytics.build_dashboard(sample(), page=1, page_size=4)
     assert data["summary"]["total"] == 8
