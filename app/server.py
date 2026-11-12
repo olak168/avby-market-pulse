@@ -164,14 +164,12 @@ def export_deals_csv(
     sort: str = "relevance",
 ) -> Response:
     """CSV with every below-median car in the current selection (not just one page)."""
-    cars = analytics.filter_cars(
-        _cars(),
-        **_filters(
-            brand, body, fuel, year_min, year_max, price_min, price_max,
-            mileage_max, q, sort,
-        ),
+    filters = _filters(
+        brand, body, fuel, year_min, year_max, price_min, price_max,
+        mileage_max, q, sort,
     )
-    deals = analytics.below_brand_median(cars)
+    cars = analytics.filter_cars(_cars(), **filters)
+    deals = analytics.below_brand_median(cars, sort=filters["sort"])
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=";")
     writer.writerow([label for _, label in DEAL_CSV_COLUMNS])

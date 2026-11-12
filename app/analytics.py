@@ -255,9 +255,14 @@ def price_vs_mileage(cars: list[Car], limit: int = 700) -> list[dict[str, Any]]:
 
 
 def below_brand_median(
-    cars: list[Car], min_brand_count: int = 5
+    cars: list[Car], min_brand_count: int = 5, sort: str = "relevance"
 ) -> list[dict[str, Any]]:
-    """Every car priced below the median for its own brand, biggest gap first.
+    """Every car priced below the median for its own brand.
+
+    By default the biggest gap to the brand median comes first. Passing a
+    dashboard ``sort`` key (e.g. ``price_desc``) re-orders the same rows the
+    way the listings table is ordered, so one sort selection drives both
+    blocks.
 
     This is a transparent heuristic, not a valuation model: brands with fewer
     than ``min_brand_count`` cars in the current selection are skipped, so a
@@ -292,12 +297,19 @@ def below_brand_median(
                         "price_byn": car.get("price_byn"),
                         "discount_pct": round(discount, 1),
                         "brand_median_usd": round(medians[brand], 1),
+                        "engine_type": car.get("engine_type"),
+                        "body_type": car.get("body_type"),
+                        "days_on_sale": car.get("days_on_sale"),
                         "photo": car.get("photo"),
                         "url": car.get("url"),
                         "location": car.get("location"),
                     }
                 )
     scored.sort(key=lambda r: r["discount_pct"], reverse=True)
+
+    key = SORT_OPTIONS.get(sort, (None, None))[1]
+    if key is not None:
+        scored.sort(key=key)
     return scored
 
 
@@ -330,7 +342,7 @@ def build_dashboard(
     **filters: Any,
 ) -> dict[str, Any]:
     filtered = filter_cars(cars, **filters)
-    deals = below_brand_median(filtered)
+    deals = below_brand_median(filtered, sort=filters.get("sort") or "relevance")
     return {
         "summary": summary(filtered),
         "charts": {
@@ -360,7 +372,11 @@ def build_deals(
     """Paginated view over *all* cars below their brand median."""
     filtered = filter_cars(cars, **filters)
     return paginate(
-        below_brand_median(filtered, min_brand_count=min_brand_count),
+        below_brand_median(
+            filtered,
+            min_brand_count=min_brand_count,
+            sort=filters.get("sort") or "relevance",
+        ),
         page=page,
         page_size=page_size,
     )
