@@ -25,10 +25,10 @@ SORT_OPTIONS = {
         "В порядке убывания скорингового балла",
         lambda c: -(c.get("score") or 0),
     ),
-    # Price first, score as the tie-breaker inside the same price.
-    "price_score_desc": (
-        "В порядке убывания цены и скорингового балла",
-        lambda c: (-(c.get("price_usd") or 0), -(c.get("score") or 0)),
+    # Score first, cheapest listing first among equal scores.
+    "score_price_asc": (
+        "В порядке убывания скорингового балла и возрастания цены",
+        lambda c: (-(c.get("score") or 0), c.get("price_usd") or 0),
     ),
 }
 

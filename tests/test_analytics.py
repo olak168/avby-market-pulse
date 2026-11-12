@@ -282,38 +282,44 @@ def test_sort_by_score_desc_orders_both_blocks():
     assert all(d["score"] is not None for d in deals["items"])
 
 
-def test_sort_by_price_then_score_desc():
-    # Two cars share a price, so the score must decide; the most expensive car
-    # still comes first no matter how good its score is.
+def test_sort_by_score_then_price_asc():
+    # Score comes first: a cheap high-score listing must beat an expensive
+    # low-score one. Price only breaks ties inside the same score.
     cars = [
-        car(id=1, brand="BMW", price_usd=30000, year=2010, mileage_km=250000),
-        car(id=2, brand="BMW", price_usd=30000, year=2022, mileage_km=20000),
-        car(id=3, brand="BMW", price_usd=40000, year=2005, mileage_km=400000),
-        car(id=4, brand="BMW", price_usd=20000, year=2021, mileage_km=30000),
-        car(id=5, brand="BMW", price_usd=30000, year=2016, mileage_km=120000),
+        car(id=1, brand="BMW", price_usd=10000, year=2020, mileage_km=30000),
+        car(id=2, brand="BMW", price_usd=50000, year=2005, mileage_km=400000),
+        car(id=3, brand="BMW", price_usd=30000, year=2019, mileage_km=40000),
+        car(id=4, brand="BMW", price_usd=20000, year=2018, mileage_km=60000),
+        car(id=5, brand="BMW", price_usd=20000, year=2010, mileage_km=200000),
     ]
-    table = analytics.filter_cars(cars, sort="price_score_desc")
-    assert [c["id"] for c in table] == [3, 2, 5, 1, 4]
-    prices = [c["price_usd"] for c in table]
-    assert prices == sorted(prices, reverse=True)
-    same_price = [c["score"] for c in table if c["price_usd"] == 30000]
-    assert same_price == sorted(same_price, reverse=True)
+    table = analytics.filter_cars(cars, sort="score_price_asc")
+    assert table[0]["id"] == 1
+    assert table[-1]["id"] == 2
 
-    # Below-median deals must follow the same rule: price first, score second.
+    scores = [c["score"] for c in table]
+    assert scores == sorted(scores, reverse=True)
+    prices = [c["price_usd"] for c in table]
+    assert prices != sorted(prices), "score must dominate price"
+    for left, right in zip(table, table[1:]):
+        if left["score"] == right["score"]:
+            assert left["price_usd"] <= right["price_usd"]
+
+    # Below-median deals must follow the same rule: score first, price second.
     deals_cars = [
         car(id=11, brand="A", price_usd=10000, year=2000, mileage_km=400000),
         car(id=12, brand="A", price_usd=10000, year=2020, mileage_km=20000),
-        car(id=13, brand="A", price_usd=30000, year=2015, mileage_km=100000),
+        car(id=13, brand="A", price_usd=15000, year=2010, mileage_km=200000),
         car(id=14, brand="A", price_usd=30000, year=2016, mileage_km=90000),
-        car(id=15, brand="A", price_usd=30000, year=2017, mileage_km=80000),
+        car(id=15, brand="A", price_usd=40000, year=2017, mileage_km=80000),
+        car(id=16, brand="A", price_usd=50000, year=2022, mileage_km=10000),
     ]
-    deals = analytics.build_deals(deals_cars, page=1, page_size=10, sort="price_score_desc")
-    assert [d["id"] for d in deals["items"]] == [12, 11]
+    deals = analytics.build_deals(deals_cars, page=1, page_size=10, sort="score_price_asc")
+    assert [d["id"] for d in deals["items"]] == [12, 13, 11]
 
 
-def test_price_score_sort_is_offered():
+def test_score_price_sort_is_offered():
     labels = [label for label, _ in analytics.SORT_OPTIONS.values()]
-    assert "В порядке убывания цены и скорингового балла" in labels
+    assert "В порядке убывания скорингового балла и возрастания цены" in labels
 
 
 def test_build_dashboard_shape():

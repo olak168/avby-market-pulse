@@ -21,10 +21,10 @@
     { id: "fresh", label: "Дольше всего в продаже", key: (c) => -(c.days_on_sale || 0) },
     { id: "score_desc", label: "В порядке убывания скорингового балла", key: (c) => -(c.score || 0) },
     {
-      id: "price_score_desc",
-      label: "В порядке убывания цены и скорингового балла",
-      // Price first, score as the tie-breaker inside the same price.
-      key: (c) => [-(c.price_usd || 0), -(c.score || 0)],
+      id: "score_price_asc",
+      label: "В порядке убывания скорингового балла и возрастания цены",
+      // Score first, cheapest listing first among equal scores.
+      key: (c) => [-(c.score || 0), c.price_usd || 0],
     },
   ];
   const SORT_KEYS = new Map(SORT_OPTIONS.map((o) => [o.id, o.key]));
