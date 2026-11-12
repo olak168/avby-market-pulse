@@ -291,7 +291,7 @@
     return points;
   }
 
-  function belowBrandMedian(cars, minBrandCount = 5) {
+  function belowBrandMedian(cars, minBrandCount = 5, sort = "relevance") {
     const groups = groupBy(cars, "brand");
     const medians = new Map();
     for (const [brand, items] of groups) {
@@ -317,12 +317,19 @@
         price_byn: car.price_byn,
         discount_pct: round1(discount),
         brand_median_usd: round1(brandMedian),
+        engine_type: car.engine_type,
+        body_type: car.body_type,
+        days_on_sale: car.days_on_sale,
         photo: car.photo,
         url: car.url,
         location: car.location,
       });
     }
+    // Default: biggest gap to the brand median first. A chosen sort key
+    // re-orders the same rows exactly like the listings table.
     scored.sort((a, b) => b.discount_pct - a.discount_pct);
+    const key = SORT_KEYS.get(sort);
+    if (key) scored.sort((a, b) => key(a) - key(b));
     return scored;
   }
 
@@ -344,7 +351,7 @@
 
   function buildDashboard(cars, page = 1, pageSize = 12, filters = {}) {
     const filtered = filterCars(cars, filters);
-    const deals = belowBrandMedian(filtered);
+    const deals = belowBrandMedian(filtered, 5, filters.sort || "relevance");
     return {
       summary: summary(filtered),
       charts: {
@@ -365,7 +372,12 @@
   }
 
   function buildDeals(cars, page = 1, pageSize = 12, filters = {}) {
-    return paginate(belowBrandMedian(filterCars(cars, filters)), page, pageSize);
+    const f = filters || {};
+    return paginate(
+      belowBrandMedian(filterCars(cars, f), 5, f.sort || "relevance"),
+      page,
+      pageSize
+    );
   }
 
   function filterOptions(cars) {
@@ -407,8 +419,10 @@
   }
 
   const exportCars = (cars, filters) => toCsv(CARS_COLUMNS, filterCars(cars, filters));
-  const exportDeals = (cars, filters) =>
-    toCsv(DEAL_COLUMNS, belowBrandMedian(filterCars(cars, filters)));
+  const exportDeals = (cars, filters) => {
+    const f = filters || {};
+    return toCsv(DEAL_COLUMNS, belowBrandMedian(filterCars(cars, f), 5, f.sort || "relevance"));
+  };
 
   global.AvbyAnalytics = {
     SORT_OPTIONS,
