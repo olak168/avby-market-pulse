@@ -15,6 +15,8 @@ import http.cookiejar
 import json
 import random
 import re
+import shutil
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -186,10 +188,54 @@ def warm_up(timeout: float = 15.0) -> None:
         pass  # the filter request below reports the real problem
 
 
+def _fetch_with_curl(url: str, timeout: float = 25.0) -> str:
+    """Fetch ``url`` through curl as a second transport.
+
+    The site's bot filter answers Python's TLS/HTTP signature with a
+    non-standard 468 while a plain ``curl`` request with identical headers
+    usually passes, so the scraper falls back to it instead of giving up.
+    Raises :class:`ScrapeError` when curl is missing or the request fails.
+    """
+    curl = shutil.which("curl")
+    if not curl:
+        raise ScrapeError("curl is not installed")
+
+    command = [
+        curl,
+        "--silent",
+        "--show-error",
+        "--compressed",
+        "--max-time",
+        str(int(timeout)),
+        "--user-agent",
+        HEADERS["User-Agent"],
+        "--header",
+        f"Accept: {HEADERS['Accept']}",
+        "--header",
+        f"Accept-Language: {HEADERS['Accept-Language']}",
+        url,
+    ]
+    try:
+        completed = subprocess.run(command, capture_output=True, timeout=timeout + 10)
+    except subprocess.TimeoutExpired as exc:
+        raise ScrapeError(f"curl timed out after {timeout + 10:.0f}s") from exc
+
+    if completed.returncode != 0:
+        detail = " ".join(completed.stderr.decode("utf-8", "replace").split())[:200]
+        raise ScrapeError(f"curl exit {completed.returncode}: {detail or 'no stderr'}")
+
+    html = completed.stdout.decode("utf-8", "replace")
+    if "__NEXT_DATA__" not in html:
+        raise ScrapeError("curl got a page without __NEXT_DATA__ (bot filter?)")
+    return html
+
+
 def fetch_page(page: int, timeout: float = 25.0, retries: int = 3) -> str:
     """Fetch the raw HTML for one filter page, with retries."""
     url = FILTER_URL.format(page=page)
     last_error: Any = None
+    curl_error: ScrapeError | None = None
+    curl_tried = False
     for attempt in range(1, retries + 1):
         request = urllib.request.Request(url, headers=HEADERS)
         try:
@@ -208,6 +254,14 @@ def fetch_page(page: int, timeout: float = 25.0, retries: int = 3) -> str:
             last_error = f"HTTP {exc.code} {exc.reason}".strip()
             if snippet:
                 last_error += f" - {snippet}"
+
+            if exc.code in (403, 468) and not curl_tried:
+                curl_tried = True
+                try:
+                    return _fetch_with_curl(url, timeout)
+                except ScrapeError as curl_exc:
+                    curl_error = curl_exc
+
             if exc.code not in (429, 468) and exc.code < 500:
                 break  # a retry cannot fix 403/404
             if attempt < retries:
@@ -216,7 +270,10 @@ def fetch_page(page: int, timeout: float = 25.0, retries: int = 3) -> str:
             last_error = exc
             if attempt < retries:
                 time.sleep(1.5 * attempt + random.uniform(0, 1.0))
-    raise ScrapeError(f"failed to fetch {url}: {last_error}")
+    message = f"failed to fetch {url}: {last_error}"
+    if curl_error is not None:
+        message += f" | curl fallback: {curl_error}"
+    raise ScrapeError(message)
 
 
 def scrape(
